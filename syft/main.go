@@ -55,7 +55,7 @@ func New(
 // Add a output format to syft
 func (s *Syft) WithOutputFormat(
 	// format of the output, e.g. spdx, syft-table, syft-json
-	format,
+	format string,
 	// output filename, e.g. syft.json
 	file string,
 ) *Syft {
