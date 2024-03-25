@@ -1,4 +1,4 @@
-module dagger/syft
+module github.com/Transmitt0r/daggerverse/syft
 
 go 1.21.7
 
