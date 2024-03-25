@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
+	"github.com/Transmitt0r/daggerverse/syft/command"
 )
 
 const (
@@ -14,6 +14,7 @@ const (
 	defaultImage            = "anchore/syft"
 	defaultTemplatePath     = "template.templ"
 	defaultContainerTarPath = "container.tar"
+	defaultOutputDirectory  = "out"
 )
 
 var (
@@ -23,7 +24,10 @@ var (
 )
 
 type Syft struct {
+	// Container with syft installed
 	Container *Container
+	// +private
+	OutputFormats []OutputFormat
 }
 
 // Create a new syft instance
@@ -48,13 +52,33 @@ func New(
 	return s
 }
 
+// Add a output format to syft
+func (s *Syft) WithOutputFormat(
+	// format of the output, e.g. spdx, syft-table, syft-json
+	format,
+	// output filename, e.g. syft.json
+	file string,
+) *Syft {
+	if s.OutputFormats == nil {
+		s.OutputFormats = []OutputFormat{}
+	}
+	s.OutputFormats = append(s.OutputFormats, OutputFormat{
+		Format: format,
+		Output: file,
+	})
+	return s
+}
+
+type OutputFormat struct {
+	Format string
+	Output string
+}
+
 // Scans a container and generates an sbom
 func (s *Syft) Scan(
 	ctx context.Context,
 	// container for which the SBOM should be generated
 	container *Container,
-	// +optional
-	basePath string,
 	//+optional
 	exclude []string,
 	// squashed or all-layers
@@ -71,23 +95,16 @@ func (s *Syft) Scan(
 	selectCatalogers []string,
 	// +optional
 	template *File,
-	// output formats to generate
-	// +optional
-	// +default=["syft-json"]
-	outputFormat ...string,
-
-) ([]*File, error) {
-	if slices.Contains(outputFormat, "template") && template == nil {
+) (*Directory, error) {
+	if outputFormatContains(s.OutputFormats, "template") && template == nil {
 		return nil, ErrTemplateMissing
 	}
-	if template != nil && !slices.Contains(outputFormat, "template") {
+	if template != nil && !outputFormatContains(s.OutputFormats, "template") {
 		return nil, ErrTemplateOutputNotSet
 	}
-	scanner := s.Container.WithFile(defaultContainerTarPath, container.AsTarball())
-
 	cmdOpts := Opts{
-		outputFormat:     formatOutputFormat(outputFormat),
-		basePath:         basePath,
+		containerPath:    defaultContainerTarPath,
+		outputFormat:     formatOutputFormat(defaultOutputDirectory, s.OutputFormats),
 		exclude:          exclude,
 		scope:            scope,
 		platform:         platform,
@@ -95,6 +112,7 @@ func (s *Syft) Scan(
 		sourceVersion:    sourceVersion,
 		selectCatalogers: selectCatalogers,
 	}
+	scanner := s.Container.WithFile(defaultContainerTarPath, container.AsTarball())
 
 	if template != nil {
 		templatePath, err := template.Name(ctx)
@@ -105,22 +123,52 @@ func (s *Syft) Scan(
 		cmdOpts.templatePath = templatePath
 	}
 
-	cmd := GenerateCommand(cmdOpts)
-	scanner = scanner.WithExec(cmd)
-
-	outfiles := []*File{}
-
-	for _, out := range outputFormat {
-		outfiles = append(outfiles, scanner.File(out))
-	}
-
-	return outfiles, nil
+	cmd := generateCommand(cmdOpts)
+	fmt.Println(cmd)
+	return scanner.WithExec(cmd).Directory(defaultOutputDirectory), nil
 }
 
-func formatOutputFormat(outputFormats []string) []string {
+func formatOutputFormat(outDir string, outputFormats []OutputFormat) []string {
 	newOutputFormat := make([]string, len(outputFormats))
 	for i, out := range outputFormats {
-		newOutputFormat[i] = fmt.Sprintf("%s=%s", out, out)
+		newOutputFormat[i] = fmt.Sprintf("%s=%s/%s", out.Format, outDir, out.Output)
 	}
 	return newOutputFormat
+}
+
+type Opts struct {
+	containerPath    string
+	exclude          []string
+	scope            string
+	platform         string
+	sourceName       string
+	sourceVersion    string
+	selectCatalogers []string
+	templatePath     string
+	outputFormat     []string
+}
+
+func generateCommand(opts Opts) []string {
+	cmd := command.NewCommand("scan").
+		AddFlag("from", "oci-archive").
+		AddFlag("output", opts.outputFormat...).
+		AddFlag("exclude", opts.exclude...).
+		AddFlag("scope", opts.scope).
+		AddFlag("platform", opts.platform).
+		AddFlag("source-name", opts.sourceName).
+		AddFlag("source-version", opts.sourceVersion).
+		AddFlag("select-catalogers", opts.selectCatalogers...).
+		AddFlag("template", opts.templatePath).
+		AddCommand(opts.containerPath)
+
+	return cmd.String()
+}
+
+func outputFormatContains(format []OutputFormat, name string) bool {
+	for _, f := range format {
+		if f.Format == name {
+			return true
+		}
+	}
+	return false
 }
