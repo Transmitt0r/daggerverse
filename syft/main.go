@@ -3,17 +3,21 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 )
 
 const (
-	defaultVersion = "1.0.1"
-	defaultImage   = "anchore/syft"
+	defaultVersion          = "1.0.1"
+	defaultImage            = "anchore/syft"
+	defaultTemplatePath     = "template.templ"
+	defaultContainerTarPath = "container.tar"
 )
 
 var (
+	ErrReadTemplateName     = errors.New("unable to read template name")
 	ErrTemplateMissing      = errors.New("template file is missing")
 	ErrTemplateOutputNotSet = errors.New("template output format has been set but not template file is provided")
 )
@@ -46,6 +50,7 @@ func New(
 
 // Scans a container and generates an sbom
 func (s *Syft) Scan(
+	ctx context.Context,
 	// container for which the SBOM should be generated
 	container *Container,
 	// +optional
@@ -78,47 +83,30 @@ func (s *Syft) Scan(
 	if template != nil && !slices.Contains(outputFormat, "template") {
 		return nil, ErrTemplateOutputNotSet
 	}
-	scanner := s.Container.WithFile("container.tar", container.AsTarball())
+	scanner := s.Container.WithFile(defaultContainerTarPath, container.AsTarball())
 
-	command := []string{"scan", "--from", "oci-archive", "container.tar"}
-	for _, out := range outputFormat {
-		command = append(command, "-o", fmt.Sprintf("%s=%s", out, out))
-	}
-
-	if basePath != "" {
-		command = append(command, "--base-path", basePath)
-	}
-
-	for _, ex := range exclude {
-		command = append(command, "--exclude", ex)
-	}
-
-	if scope != "" {
-		command = append(command, "--scope", scope)
-	}
-
-	if platform != "" {
-		command = append(command, "--platform", platform)
-	}
-
-	if sourceName != "" {
-		command = append(command, "--source-name", sourceName)
-	}
-
-	if sourceVersion != "" {
-		command = append(command, "--source-version", sourceVersion)
-	}
-
-	for _, cataloger := range selectCatalogers {
-		command = append(command, "--select-catalogers", cataloger)
+	cmdOpts := Opts{
+		outputFormat:     formatOutputFormat(outputFormat),
+		basePath:         basePath,
+		exclude:          exclude,
+		scope:            scope,
+		platform:         platform,
+		sourceName:       sourceName,
+		sourceVersion:    sourceVersion,
+		selectCatalogers: selectCatalogers,
 	}
 
 	if template != nil {
-		scanner = scanner.WithFile("template", template)
-		command = append(command, "--template", "template")
+		templatePath, err := template.Name(ctx)
+		if err != nil {
+			return nil, err
+		}
+		scanner = scanner.WithFile(templatePath, template)
+		cmdOpts.templatePath = templatePath
 	}
 
-	scanner = scanner.WithExec(command)
+	cmd := GenerateCommand(cmdOpts)
+	scanner = scanner.WithExec(cmd)
 
 	outfiles := []*File{}
 
@@ -127,4 +115,12 @@ func (s *Syft) Scan(
 	}
 
 	return outfiles, nil
+}
+
+func formatOutputFormat(outputFormats []string) []string {
+	newOutputFormat := make([]string, len(outputFormats))
+	for i, out := range outputFormats {
+		newOutputFormat[i] = fmt.Sprintf("%s=%s", out, out)
+	}
+	return newOutputFormat
 }
