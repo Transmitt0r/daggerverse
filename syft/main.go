@@ -38,7 +38,13 @@ func New(
 }
 
 // Scans a container and generates an sbom
-func (s *Syft) Scan(container *Container, outputFormat ...string) []*File {
+func (s *Syft) Scan(
+	// container for which the SBOM should be generated
+	container *Container,
+	// output formats to generate
+	// +optional
+	// +default=["syft-json"]
+	outputFormat ...string) []*File {
 	command := []string{"scan", "--from", "oci-archive", "container.tar"}
 	for _, out := range outputFormat {
 		command = append(command, "-o", fmt.Sprintf("%s=%s", out, out))
