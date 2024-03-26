@@ -14,6 +14,7 @@ const (
 	defaultImage            = "anchore/syft"
 	defaultTemplatePath     = "template.templ"
 	defaultContainerTarPath = "container.tar"
+	defaultDirectoryPath    = "scan"
 	defaultOutputDirectory  = "out"
 )
 
@@ -74,8 +75,62 @@ type OutputFormat struct {
 	Output string
 }
 
+// Scans a directory and generates an sbom
+func (s *Syft) ScanDirectory(
+	ctx context.Context,
+	// directory for which the SBOM should be generated
+	directory *Directory,
+	//+optional
+	exclude []string,
+	// squashed or all-layers
+	// +optional
+	scope string,
+	// e.g. linux/arm64
+	// +optional
+	platform string,
+	// +optional
+	sourceName string,
+	// +optional
+	sourceVersion string,
+	// +optional
+	selectCatalogers []string,
+	// +optional
+	template *File,
+) (*Directory, error) {
+	if outputFormatContains(s.OutputFormats, "template") && template == nil {
+		return nil, ErrTemplateMissing
+	}
+	if template != nil && !outputFormatContains(s.OutputFormats, "template") {
+		return nil, ErrTemplateOutputNotSet
+	}
+	cmdOpts := Opts{
+		scanPath:         defaultDirectoryPath,
+		outputFormat:     formatOutputFormat(defaultOutputDirectory, s.OutputFormats),
+		exclude:          exclude,
+		scope:            scope,
+		platform:         platform,
+		sourceName:       sourceName,
+		sourceVersion:    sourceVersion,
+		selectCatalogers: selectCatalogers,
+	}
+	scanner := s.Container.WithMountedDirectory(defaultDirectoryPath, directory)
+
+	if template != nil {
+		templatePath, err := template.Name(ctx)
+		if err != nil {
+			return nil, err
+		}
+		scanner = scanner.WithFile(templatePath, template)
+		cmdOpts.templatePath = templatePath
+	}
+
+	cmd := generateCommand(cmdOpts)
+	fmt.Println(cmd)
+	return scanner.WithExec(cmd).Directory(defaultOutputDirectory), nil
+}
+
 // Scans a container and generates an sbom
-func (s *Syft) Scan(
+func (s *Syft) ScanContainer(
 	ctx context.Context,
 	// container for which the SBOM should be generated
 	container *Container,
@@ -103,7 +158,7 @@ func (s *Syft) Scan(
 		return nil, ErrTemplateOutputNotSet
 	}
 	cmdOpts := Opts{
-		containerPath:    defaultContainerTarPath,
+		scanPath:         defaultContainerTarPath,
 		outputFormat:     formatOutputFormat(defaultOutputDirectory, s.OutputFormats),
 		exclude:          exclude,
 		scope:            scope,
@@ -137,7 +192,7 @@ func formatOutputFormat(outDir string, outputFormats []OutputFormat) []string {
 }
 
 type Opts struct {
-	containerPath    string
+	scanPath         string
 	exclude          []string
 	scope            string
 	platform         string
@@ -150,7 +205,6 @@ type Opts struct {
 
 func generateCommand(opts Opts) []string {
 	cmd := command.NewCommand("scan").
-		AddFlag("from", "oci-archive").
 		AddFlag("output", opts.outputFormat...).
 		AddFlag("exclude", opts.exclude...).
 		AddFlag("scope", opts.scope).
@@ -159,7 +213,7 @@ func generateCommand(opts Opts) []string {
 		AddFlag("source-version", opts.sourceVersion).
 		AddFlag("select-catalogers", opts.selectCatalogers...).
 		AddFlag("template", opts.templatePath).
-		AddCommand(opts.containerPath)
+		AddCommand(opts.scanPath)
 
 	return cmd.String()
 }
