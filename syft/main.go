@@ -97,36 +97,8 @@ func (s *Syft) ScanDirectory(
 	// +optional
 	template *File,
 ) (*Directory, error) {
-	if outputFormatContains(s.OutputFormats, "template") && template == nil {
-		return nil, ErrTemplateMissing
-	}
-	if template != nil && !outputFormatContains(s.OutputFormats, "template") {
-		return nil, ErrTemplateOutputNotSet
-	}
-	cmdOpts := Opts{
-		scanPath:         defaultDirectoryPath,
-		outputFormat:     formatOutputFormat(defaultOutputDirectory, s.OutputFormats),
-		exclude:          exclude,
-		scope:            scope,
-		platform:         platform,
-		sourceName:       sourceName,
-		sourceVersion:    sourceVersion,
-		selectCatalogers: selectCatalogers,
-	}
-	scanner := s.Container.WithMountedDirectory(defaultDirectoryPath, directory)
-
-	if template != nil {
-		templatePath, err := template.Name(ctx)
-		if err != nil {
-			return nil, err
-		}
-		scanner = scanner.WithFile(templatePath, template)
-		cmdOpts.templatePath = templatePath
-	}
-
-	cmd := generateCommand(cmdOpts)
-	fmt.Println(cmd)
-	return scanner.WithExec(cmd).Directory(defaultOutputDirectory), nil
+	s.Container = s.Container.WithMountedDirectory(defaultDirectoryPath, directory)
+	return s.scan(ctx, defaultDirectoryPath, exclude, scope, platform, sourceName, sourceVersion, selectCatalogers, template)
 }
 
 // Scans a container and generates an sbom
@@ -151,14 +123,37 @@ func (s *Syft) ScanContainer(
 	// +optional
 	template *File,
 ) (*Directory, error) {
-	if outputFormatContains(s.OutputFormats, "template") && template == nil {
-		return nil, ErrTemplateMissing
+	s.Container = s.Container.WithFile(defaultContainerTarPath, container.AsTarball())
+	return s.scan(ctx, defaultContainerTarPath, exclude, scope, platform, sourceName, sourceVersion, selectCatalogers, template)
+}
+
+func (s *Syft) scan(
+	ctx context.Context,
+	// path for which the SBOM should be generated
+	scanPath string,
+	//+optional
+	exclude []string,
+	// squashed or all-layers
+	// +optional
+	scope string,
+	// e.g. linux/arm64
+	// +optional
+	platform string,
+	// +optional
+	sourceName string,
+	// +optional
+	sourceVersion string,
+	// +optional
+	selectCatalogers []string,
+	// +optional
+	template *File,
+) (*Directory, error) {
+	if err := checkTemplate(s.OutputFormats, template); err != nil {
+		return nil, err
 	}
-	if template != nil && !outputFormatContains(s.OutputFormats, "template") {
-		return nil, ErrTemplateOutputNotSet
-	}
+	scanner := s.Container
 	cmdOpts := Opts{
-		scanPath:         defaultContainerTarPath,
+		scanPath:         scanPath,
 		outputFormat:     formatOutputFormat(defaultOutputDirectory, s.OutputFormats),
 		exclude:          exclude,
 		scope:            scope,
@@ -167,19 +162,15 @@ func (s *Syft) ScanContainer(
 		sourceVersion:    sourceVersion,
 		selectCatalogers: selectCatalogers,
 	}
-	scanner := s.Container.WithFile(defaultContainerTarPath, container.AsTarball())
-
 	if template != nil {
 		templatePath, err := template.Name(ctx)
 		if err != nil {
 			return nil, err
 		}
-		scanner = scanner.WithFile(templatePath, template)
+		scanner = s.Container.WithFile(templatePath, template)
 		cmdOpts.templatePath = templatePath
 	}
-
 	cmd := generateCommand(cmdOpts)
-	fmt.Println(cmd)
 	return scanner.WithExec(cmd).Directory(defaultOutputDirectory), nil
 }
 
@@ -225,4 +216,14 @@ func outputFormatContains(format []OutputFormat, name string) bool {
 		}
 	}
 	return false
+}
+
+func checkTemplate(outputFormats []OutputFormat, template *File) error {
+	if outputFormatContains(outputFormats, "template") && template == nil {
+		return ErrTemplateMissing
+	}
+	if template != nil && !outputFormatContains(outputFormats, "template") {
+		return ErrTemplateOutputNotSet
+	}
+	return nil
 }
